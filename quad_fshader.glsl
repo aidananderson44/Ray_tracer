@@ -14,9 +14,11 @@ uniform float left;
 uniform float right;
 uniform float bottom;
 uniform float top;
+uniform float r;
+uniform int num_aabb;
 #define WHITE vec3(1, 1, 1)
 #define BLACK vec3(0,0,0)
-#define epsilon 0.0005
+#define epsilon 0.0001
 #define PI 3.14159265359f
 struct obj{
 	float type;
@@ -58,6 +60,22 @@ struct tr
 
 
 };
+
+struct AABB
+{
+	vec4 c;
+
+	/*float x_min;
+	float x_max;
+	float y_min;
+	float y_max;
+	float z_mn;
+	float z_max;
+	int left;
+	int right;*/
+};
+
+
 struct stack_obj
 {
 	vec3 ray;
@@ -68,13 +86,18 @@ const int num_iter = 5;
 stack_obj stack[num_iter];
 int stack_back = 0;
 int stack_front = 0;
-layout (std140) uniform object_data
+
+layout (std430, binding = 0) buffer object_data
 {
-	obj object[99];
+	obj object[];
 };
-layout (std140) uniform triangle_data
+layout (std430, binding = 1) buffer triangle_data
 {
-	tr triangle[99];
+	tr triangle[];
+};
+layout (std430, binding = 2) buffer aabb_data
+{
+	obj aabb[];
 };
 
 bool is_inside(vec3 pos, vec3 ray, obj o)
@@ -148,6 +171,35 @@ float plane_intersect(vec3 ray, vec3 E,vec3 plane_pos, vec3 plane_normal)
 		return t;		
 	}
 }
+bool plane_intersect(vec3 ray, vec3 E, vec3 plane_pos, vec3 plane_normal, float width, float len)
+{
+	float denom = dot(ray, plane_normal);
+	if (denom == 0)
+		return false;
+	else {		
+		float t = dot((plane_pos - E), plane_normal) / denom;
+		if(t < 0)
+			return false;
+		vec3 intersect_pos = E + t*ray - plane_pos;
+		
+		vec3 b = vec3(0, 1, 0);
+		vec3 U = vec3(1, 0, 0)*width;
+		vec3 V = vec3(0, 0, 1)*len;
+		if(length(cross(b, plane_normal)) > epsilon)
+		{
+			U = normalize(cross(plane_normal, b))*width;
+			V = normalize(cross(U, plane_normal))*len;
+		}
+		if( abs( dot(intersect_pos, U)) < dot(U, U) && 
+			abs(dot(intersect_pos, V)) < dot(V, V))
+		{	return true;}
+		return false;			
+	}
+}
+
+
+
+
 //https://en.wikipedia.org/wiki/M%C3%B6ller%E2%80%93Trumbore_intersection_algorithm
 //https://www.scratchapixel.com/lessons/3d-basic-rendering/ray-tracing-rendering-a-triangle/ray-triangle-intersection-geometric-solution
 float triangle_intersect(vec3 ray, vec3 E, vec3 vertex0, vec3 vertex1, vec3 vertex2, vec3 norm)
@@ -196,11 +248,11 @@ float intersect(vec3 ray, vec3 E, int i)
 
 vec3 plane_color(vec3 pos, vec3 plane_pos)
 {
-	int checker_board_size = 1;
+	float checker_board_size = 1;
 	vec3 obj_pos = pos - plane_pos;
 	float width = dot(obj_pos, vec3(1, 0, 0));
 	float height = dot(obj_pos, vec3(0, 0, 1));
-
+	
 	int on = 0;
 	int off = 1;
 	int w_on = 0;
@@ -246,7 +298,119 @@ vec3 get_colour(vec3 pos, int i)
 	else
 		return vec3(triangle[i - num_objects].c1, triangle[i - num_objects].c2,triangle[i - num_objects].c3);
 }
+
+bool intersect_aabb(vec3 ray, vec3 E, int i)
+{
+	obj aabb = object[i];
+	vec2 x_lim = vec2(aabb.posx, aabb.posy);
+	vec2 y_lim = vec2(aabb.posz, aabb.dirx);
+	vec2 z_lim = vec2(aabb.diry, aabb.dirz);
+	if(E.x >= x_lim.x && E.x <= x_lim.y &&
+	   E.y >= y_lim.x && E.y <= y_lim.y &&
+	   E.z >= z_lim.x && E.z <= z_lim.y)
+	{  return true;}
+	vec3 plane_norm = vec3(-1, 0, 0);
+	vec3 plane_pos = vec3(x_lim.x, (y_lim.x + y_lim.y)/2, (z_lim.x + z_lim.y)/2.0f);
+	float width = (z_lim.y - z_lim.x)/2.0f;
+	float len = (y_lim.y - y_lim.x)/2.0f;
+
+
+
+	if(plane_intersect(ray, E, plane_pos, plane_norm, width, len))
+		return true;
+
+	
+	plane_norm = vec3(1, 0, 0);
+	plane_pos = vec3(x_lim.y, (y_lim.x + y_lim.y)/2, (z_lim.x + z_lim.y)/2);
+	if(plane_intersect(ray, E, plane_pos, plane_norm, width, len))
+		return true;	
+	
+	plane_norm = vec3(0, -1, 0);
+	plane_pos = vec3((x_lim.x + x_lim.y)/2, y_lim.x, (z_lim.x + z_lim.y)/2.0f);
+	width = (x_lim.y - x_lim.x)/2.0f;
+	len = (z_lim.y - z_lim.x)/2.0f;
+	if(plane_intersect(ray, E, plane_pos, plane_norm, width, len))
+		return true;
+	
+	plane_norm = vec3(0, 1, 0);
+	plane_pos = vec3((x_lim.x + x_lim.y)/2, y_lim.y, (z_lim.x + z_lim.y)/2.0f);
+	if(plane_intersect(ray, E, plane_pos, plane_norm, width, len))
+		return true;
+	
+	plane_norm = vec3(0, 0, -1);
+	plane_pos = vec3((x_lim.x + x_lim.y)/2, (y_lim.x + y_lim.y)/2, z_lim.x);
+	width = (y_lim.y - y_lim.x)/2.0f;
+	len = (x_lim.y - x_lim.x)/2.0f;
+	if(plane_intersect(ray, E, plane_pos, plane_norm, width, len))
+		return true;
+	
+	plane_norm = vec3(0, 0, 1);
+	plane_pos = vec3((x_lim.x + x_lim.y)/2, (y_lim.x + y_lim.y)/2, z_lim.y);
+	if(plane_intersect(ray, E, plane_pos, plane_norm, width, len))
+		return true;
+	
+	return false;
+
+}
+
+
+
 int find_closest(vec3 ray, vec3 E)
+{
+	const int max_iter = 99;
+	int aabb_stack[max_iter];
+	int stack_ptr = 0;
+	float closest = 1.0 / 0.0;
+	int closest_index = -1;
+	
+
+	aabb_stack[stack_ptr] = num_objects; 
+	stack_ptr++;
+	
+	
+	for(;;)
+	{
+		if(stack_ptr <= 0) //stack is empty so we are one looking
+			return closest_index;
+		
+		
+		stack_ptr--;
+		int i = aabb_stack[stack_ptr];	//pop index from stack	
+
+		if(intersect_aabb(ray, E, i))
+		{
+			int left =  int(object[i].size1); //left branch, -1 implies its a leaf
+			int right = int(object[i].size2);//right branch, if leaf, then holds index to object
+			
+			if(left == -1)//check if its a leaf
+			{	
+				
+				float t = intersect(ray, E, right);//if intersects, check if its closest 
+				if(t >= 0 && t < closest)
+				{
+					closest = t;
+					closest_index = right;
+				}
+			}
+			else // not a leaf, push onto stack
+			{
+				left += num_objects;
+				right += num_objects;
+				aabb_stack[stack_ptr] = left;
+				stack_ptr++;
+				aabb_stack[stack_ptr] = right;
+				stack_ptr++;
+			}
+		}
+	}
+	return -1;
+	
+}
+
+
+
+
+int _find_closest(vec3 ray, vec3 E)
 {
 
 	int i;
@@ -344,8 +508,11 @@ vec3 trace(vec3 init_ray, vec3 init_E)
 		float intensity = obj.intensity;
 		int i = find_closest(ray, E);
 		if(i == -1)
-			break;	
-
+			break;
+			
+	//	if(i == 0)
+	//		return vec3(0, 0, 1);	
+	//	return vec3(1, 0, 0);
 		vec3 pos = E + ray*intersect(ray, E, i);
 		vec3 normal = get_normal(pos, i, E, ray);
 		vec3 colour = get_colour(pos, i);
@@ -358,10 +525,10 @@ vec3 trace(vec3 init_ray, vec3 init_E)
 		final += intensity*l * pow(0.75, stack_back);
 
 		
-		float n1 = 1.0;
-		float n2 = 1.1;
-		float R0 = ((n1 - n2)/(n1 + n2)) * ((n1 - n2)/(n1 + n2));
-		float R_t = R0 + (1 - R0)* pow((1 - dot(normal, -ray)), 5);
+	//	float n1 = 1.0;
+	//	float n2 = 1.1;
+//		float R0 = ((n1 - n2)/(n1 + n2)) * ((n1 - n2)/(n1 + n2));
+//		float R_t = R0 + (1 - R0)* pow((1 - dot(normal, -ray)), 5);
 		/*
 		if(get_refractive(object[i]) == 1)
 		{
@@ -400,17 +567,30 @@ vec2 rand_polar(vec2 seed, float radius)
 	
 }
 
+
+
 void main() 
 {
 
 	
 
-	
+
+
+/*	float phi = mix(0, 2*PI, uv.x);
+	float theta = mix(0, PI,1- uv.y); 
+	if(phi < 0)
+		phi = 2*PI - mod(phi, 2*PI);
+	if(phi > 0)
+		phi = mod(phi, 2*PI);*/
 	vec3 pixel = left * U + (right - left)*uv.x* U;
 	pixel += bottom * V + (top - bottom)*uv.y*V;
-	
+	//vec3 pixel = r*vec3( sin(theta)*cos(phi), cos(theta), sin(theta)*sin(phi));
 	vec3 ray = normalize(pixel + S - E);
-	color = vec4(1.5*trace(ray, E), 1);
+
+
+	color = vec4( 1.5*trace(ray, E), 1);
+	//color = vec4(aabb[0].type, 0, 0, 1);
+	
 //	color = vec4(triangle[1].c1,triangle[1].c2,triangle[1].c3 , 1);
 	
 /*	int i = 1;
